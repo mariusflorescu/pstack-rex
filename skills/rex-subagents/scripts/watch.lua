@@ -40,6 +40,10 @@ end
 
 local function react(out, block)
   for main in out:gmatch("notify (%S+)") do deliver_soon(main) end
+  local quick = out:match("recheck (%S+)")
+  if quick then
+    rex.after(5, function() react(run({ cli, "_settle", block, quick, "quick" }), block) end)
+  end
   local turn = out:match("settle (%S+)")
   if turn then
     rex.after(settle, function() react(run({ cli, "_settle", block, turn }), block) end)
@@ -53,7 +57,8 @@ local function event(block, ...)
   react(run(argv), block)
 end
 
--- A wake-up for a Claude main on a dialog waits until it leaves the dialog
+-- A wake-up waits while a Claude main is on a dialog, or while a Codex main is in a turn
+-- (a queued line would land after the turn anyway). Deliver when the main pane leaves that state.
 local main_state = {}
 
 rex.on("terminal.program_status_changed", function(ctx, ev)
@@ -63,7 +68,11 @@ rex.on("terminal.program_status_changed", function(ctx, ev)
   if registered(ctx.block_id) then
     event(ctx.block_id, "status", r.state, r.kind, r.msg)
   elseif is_main(ctx.block_id) then
-    if main_state[ctx.block_id] == "blocked" and r.state ~= "blocked" then deliver_soon(ctx.block_id) end
+    local prev = main_state[ctx.block_id]
+    local resting = r.state == "done" or r.state == "idle"
+    if (prev == "blocked" and r.state ~= "blocked") or (resting and prev ~= r.state) then
+      deliver_soon(ctx.block_id)
+    end
     main_state[ctx.block_id] = r.state
   end
 end)

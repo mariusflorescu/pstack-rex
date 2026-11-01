@@ -673,6 +673,25 @@ running_summary() { # main -> "2 of 3 workers still running" or ""
   if [ "$busy" -eq 0 ]; then echo "No worker is still running."; else echo "$busy of $total workers still running."; fi
 }
 
+# A "finished" line is stale once the main agent has read that worker's report since: drop it
+drop_stale() { # pending-dir
+  local f w ev at read
+  for f in "$1"/*.json; do
+    [ -f "$f" ] || continue
+    w=$(jq -r '.worker // empty' "$f")
+    ev=$(jq -r '.event' "$f")
+    case $ev in finished | turn_ended) ;; *) continue ;; esac
+    [ -n "$w" ] && [ -f "$(wfile "$w")" ] || continue
+    at=$(basename "$f" | cut -d- -f1)
+    read=$(wfield "$w" .result_read_epoch)
+    if [ -n "$read" ] && [ "$read" -ge "$at" ]; then
+      mkdir -p "$1/../sent"
+      mv "$f" "$1/../sent/"
+      log "dropped a stale line for $w (its report was read)"
+    fi
+  done
+}
+
 compose() { # main pending-dir -> one line
   local main=$1 dir=$2 parts
   parts=$(ls "$dir"/*.json 2>/dev/null | sort | xargs cat 2>/dev/null | jq -rs 'map(.text) | join(" ")')
@@ -685,6 +704,8 @@ cmd__deliver() { # main block (called by the watcher, 2s after the last event)
   key=$(key_of "$main")
   dir="$INBOX/$key/pending"
   ls "$dir"/*.json >/dev/null 2>&1 || return 0
+  drop_stale "$dir"
+  ls "$dir"/*.json >/dev/null 2>&1 || return 0
   pid=$(cat "$INBOX/$key/waiting.pid" 2>/dev/null || true)
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then return 0; fi # a `subagent wait` takes it
   rec=$(cat "$(main_file "$main")" 2>/dev/null) || return 0
@@ -693,6 +714,9 @@ cmd__deliver() { # main block (called by the watcher, 2s after the last event)
   line=$(compose "$main" "$dir" | tr '\n' ' ' | sed -E 's/[[:space:]]+$//')
   case $agent in
     codex)
+      # A queued line lands only after Codex's current turn anyway, so hold it until the turn ends:
+      # by then the main agent may have read the report itself, and the line is dropped as stale
+      [ "$(live_state "$s" "$main")" = working ] && { log "deliver $main: Codex main is working, will deliver when its turn ends"; return 0; }
       codex queue --thread "$(jq -r .codex_thread <<<"$rec")" --message "$line" >>"$LOGS/subagent.log" 2>&1 ||
         { log "deliver $main: codex queue failed, kept pending"; return 0; }
       ;;
@@ -720,6 +744,8 @@ on_done() { # id
   if [ -n "$marker" ]; then
     wupdate "$id" '.task_status = $m' --arg m "$marker"
     notify "$id" finished "$id finished (TASK STATUS: $marker)."
+  else
+    echo "recheck $(wfield "$id" .turn)" # the transcript can trail the status: look again in a few seconds
   fi
 }
 
@@ -738,10 +764,12 @@ cmd__event() { # block kind args... (called by watch.lua)
       [ "$state" = idle ] && [ "$prev" = done ] && return 0
       if [ "$state" = working ] && [ "$prev" != working ]; then
         wupdate "$id" '.turn += 1 | .prev_state = .state | .state = "working" | .updated_at = $t' --arg t "$(now)"
+        log "state $id $prev -> working"
         return 0
       fi
       wupdate "$id" '.prev_state = .state | .state = $s | .updated_at = $t | .done_epoch = (if $s == "done" then ($e | tonumber) else .done_epoch end)' \
         --arg s "$state" --arg t "$(now)" --arg e "$(epoch)"
+      log "state $id $prev -> $state${skind:+ ($skind)}"
       case $state in
         done) on_done "$id"; echo "settle $(wfield "$id" .turn)" ;;
         blocked)
@@ -776,8 +804,8 @@ cmd__event() { # block kind args... (called by watch.lua)
   return 0
 }
 
-cmd__settle() { # block turn (called by the watcher SETTLE seconds after a "done")
-  local id
+cmd__settle() { # block turn [quick] (called by the watcher a few seconds, then SETTLE seconds, after a "done")
+  local id quick=${3:-}
   id=$(worker_by_block "$1") || return 0
   [ "$(wfield "$id" .status)" = open ] || return 0
   [ "$(wfield "$id" .turn)" = "$2" ] || return 0 # it worked again since
@@ -789,7 +817,7 @@ cmd__settle() { # block turn (called by the watcher SETTLE seconds after a "done
   if [ -n "$marker" ]; then
     wupdate "$id" '.task_status = $m' --arg m "$marker"
     notify "$id" finished "$id finished (TASK STATUS: $marker)."
-  else
+  elif [ "$quick" != quick ]; then
     notify "$id" turn_ended "$id stopped without a TASK STATUS line."
   fi
 }
@@ -872,12 +900,15 @@ cmd_result() {
     source=screen
   fi
   marker=$(printf '%s\n' "$msg" | marker_of)
+  wupdate "$id" '.result_read_epoch = ($e | tonumber)' --arg e "$(epoch)"
   if [ "$json" = 1 ]; then
     jq -nc --arg id "$id" --arg m "$msg" --arg s "$source" --arg k "$marker" --arg st "$(wfield "$id" .state)" \
       --arg code "$(wfield "$id" .exit_code)" '{ok: true, id: $id, source: $s, state: $st,
         task_status: ($k | if . == "" then null else . end), exit_code: ($code | if . == "" then null else . end), text: $m}'
   else
     printf '%s\n' "$msg"
+    [ "$(wfield "$id" .kind)" = command ] && [ -n "$(wfield "$id" .exit_code)" ] && printf '[exit code %s]\n' "$(wfield "$id" .exit_code)"
+    return 0
   fi
 }
 
@@ -1024,6 +1055,8 @@ cmd_wait() {
     kill $! 2>/dev/null || true
   done
   sleep 1 # let a burst land together
+  drop_stale "$dir"
+  ls "$dir"/*.json >/dev/null 2>&1 || { echo "[pstack-rex] the waiting worker reports were already read. $(running_summary "$MAIN_BLOCK")"; return 0; }
   compose "$MAIN_BLOCK" "$dir"
   mkdir -p "$INBOX/$key/sent"
   mv "$dir"/*.json "$INBOX/$key/sent/" 2>/dev/null || true
