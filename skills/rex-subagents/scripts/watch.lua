@@ -86,5 +86,6 @@ rex.on("block_closed", function(ctx, ev)
 end)
 
 rex.every(30, function()
+  if next(pending) ~= nil then return end -- a delivery is about to run
   if run({ cli, "_watcher_check", session }):match("stop") then rex.stop(0) end
 end)

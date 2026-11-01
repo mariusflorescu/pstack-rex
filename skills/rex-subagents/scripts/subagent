@@ -696,7 +696,9 @@ compose() { # main pending-dir -> one line
   local main=$1 dir=$2 parts
   parts=$(ls "$dir"/*.json 2>/dev/null | sort | xargs cat 2>/dev/null | jq -rs 'map(.text) | join(" ")')
   [ ${#parts} -gt 700 ] && parts="${parts:0:700}..."
-  printf '[pstack-rex] %s %s Read a report: %s result <id>. All workers: %s status\n' "$parts" "$(running_summary "$main")" "$SELF" "$SELF"
+  local summary
+  summary=$(running_summary "$main")
+  printf '[pstack-rex] %s%s Read a report: %s result <id>. All workers: %s status\n' "$parts" "${summary:+ $summary}" "$SELF" "$SELF"
 }
 
 cmd__deliver() { # main block (called by the watcher, 2s after the last event)
@@ -833,11 +835,16 @@ finish_closed() {
   wupdate "$1" '.status = "closed" | .closed_at = $t' --arg t "$(now)"
 }
 
-cmd__watcher_check() { # session -> "stop" when no open worker lives in it
-  local f
+cmd__watcher_check() { # session -> "stop" when no open worker lives in it and no wake-up waits for delivery
+  local f m
   for f in "$WORKERS"/*.json; do
     [ -f "$f" ] || continue
     jq -e --arg s "$1" '.session_id == $s and .status != "closed"' "$f" >/dev/null 2>&1 && { echo keep; return 0; }
+  done
+  # A line still pending for a main pane here (held for a dialog or a failed send) keeps the watcher up, for an hour at most
+  for m in "$MAINS"/*.json; do
+    [ -f "$m" ] && [ "$(jq -r .session_id "$m")" = "$1" ] || continue
+    [ -n "$(find "$INBOX/$(basename "$m" .json)/pending" -name '*.json' -mmin -60 2>/dev/null | head -1)" ] && { echo keep; return 0; }
   done
   rm -f "$WATCHERS/$(key_of "$1").pid"
   echo stop
