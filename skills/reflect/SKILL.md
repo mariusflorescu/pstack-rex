@@ -6,37 +6,33 @@ disable-model-invocation: true
 
 # Reflect
 
+A skill named in bold or in backticks, or run as `/<name>`, is the file `../<name>/SKILL.md` beside this skill's directory, and a principle named without its prefix is `../principle-<name>/SKILL.md`. Read the file and follow it. Most pstack skills are user-only, so your skill tool cannot load them. Every subagent is a Rex worker pane: spawn, wait and close it per `../rex-subagents/SKILL.md`, with the defaults in the Subagents section of `../poteto-mode/SKILL.md`.
+
 Mine the current conversation for durable learnings, then route them into skill edits.
 
 Invoke when the user says "reflect" or "/reflect". Skip when the conversation is trivial, off-topic, or already covered by an existing skill the parent followed correctly. One-offs are not learnings.
 
 ## 1. Locate the active transcript
 
-Before fanning out, find this conversation's transcript in the `agent-transcripts/` directory the system prompt names. Do not glob across `~/.cursor/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.
-
-```bash
-ls -t <agent-transcripts>/*.jsonl <agent-transcripts>/*/*.jsonl <agent-transcripts>/*/subagents/*.jsonl 2>/dev/null | head -10
-```
-
-That covers the legacy flat (`<id>.jsonl`), current nested (`<id>/<id>.jsonl`), and subagent (`<parent>/subagents/<child>.jsonl`) layouts. For each candidate, read the first JSONL line. Take the file whose `message.content[0].text` contains the conversation's opening user prompt. If none matches, pass a tight digest of the session instead.
+Before fanning out, find this conversation's transcript: run `../rex-subagents/scripts/sessions path <id>` by absolute path, where `<id>` is `$CLAUDE_CODE_SESSION_ID` on Claude Code and `$CODEX_THREAD_ID` on Codex (your shell commands see both). Do not search other projects' transcripts. That crosses workspace boundaries and reads private chats from unrelated projects. If the path doesn't resolve, pass a tight digest of the session instead.
 
 ## 2. Spawn three reviewers in parallel
 
-One message, three `Task` calls, `subagent_type: generalPurpose`, agent mode (`readonly: false`). Reviewers need MCP access to look up the tickets, chat threads, and observability traces the transcript references, and readonly strips MCPs.
+One turn, three `subagent spawn` calls, each named `reflect <lens>`, with `--read-only` and its entry from the role line below. Reviewers need MCP access to look up the tickets, chat threads, and observability traces the transcript references. `--read-only` only adds a line to the brief, so MCP access stays, and a worker sees the MCP servers configured for its own harness.
 
-Each reviewer and the synthesizer name a role line in the `pstack-models.mdc` rule and a default. Set `model` to that line's value, or to the default if the rule or the line is missing. Leave `model` unset when the value is `auto` or `inherit-parent`. If the Task tool rejects a slug, use the default and say so. If it rejects the default, use the closest valid slug of the same family from its error message. Pick each subagent's reasoning level and fast or standard speed for the job, per the Subagents section of the **poteto-mode** skill.
+Each reviewer and the synthesizer name a role line in `~/.config/pstack/pstack-models.md` and a default harness. Pass the entry to `subagent spawn --entry` as written. Run the default harness on its default model if the file or the line is missing, and your own harness when the value is `auto` or `inherit-parent`. With no file, say so and suggest `/setup-pstack`. If a worker's model is rejected, run it on that harness's default model and say so. Pick each subagent's reasoning level and fast or standard speed for the job, per the Subagents section of the **poteto-mode** skill.
 
-| Lens | Role line | Default `model` | Prompt template |
+| Lens | Role line | Default harness | Prompt template |
 |---|---|---|---|
-| Judgment | `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-xhigh` | `references/judgment-reviewer.md` |
-| Tooling | `reflect tooling` | `grok-4.7-xhigh-fast` | `references/tooling-reviewer.md` |
-| Divergent | `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-xhigh` | `references/divergent-reviewer.md` |
+| Judgment | `reflect judgment, divergent, synthesizer` | `claude` (xhigh) | `references/judgment-reviewer.md` |
+| Tooling | `reflect tooling` | `codex` (xhigh) | `references/tooling-reviewer.md` |
+| Divergent | `reflect judgment, divergent, synthesizer` | `claude` (xhigh) | `references/divergent-reviewer.md` |
 
-Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in the `Task` response body.
+Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in their final message, which `subagent result` prints.
 
 ## 3. Synthesize
 
-One `Task` call, `subagent_type: generalPurpose`, `model` from the `reflect judgment, divergent, synthesizer` line (default `claude-opus-5-5-xhigh`), agent mode (`readonly: false`). It spot-verifies citations through MCP, and readonly strips MCPs. Pass `references/synthesizer.md` verbatim, with each reviewer's full output inlined where marked. It returns an Accepted / Rejected / Backlog list.
+One `subagent spawn` named `reflect synthesizer`, with `--read-only` and its entry from the `reflect judgment, divergent, synthesizer` line (default `claude`, xhigh). It spot-verifies citations through MCP. Pass `references/synthesizer.md` verbatim, with each reviewer's full output inlined where marked. It returns an Accepted / Rejected / Backlog list.
 
 ## 4. Structural enforcement check
 
@@ -48,14 +44,16 @@ Present the synthesizer's full Accepted / Rejected / Backlog output and wait for
 
 File each Backlog item to your team's devex or backlog tracker without waiting. Only the Accepted list waits for approval.
 
-Never edit a skill under `plugins/cache/`. Before approval, show its destination, `.cursor/skills/<skill>/` or `~/.cursor/skills/<skill>/`. After approval, copy the skill folder there and edit the copy. Never open a PR or push.
+Never edit an installed pstack skill under `~/.agents/skills/` or `~/.claude/skills/`, because `npx skills update -g` overwrites it. Before approval, show its destination: a copy under a new name in the project, at `.agents/skills/<new-name>/` with the symlink `.claude/skills/<new-name> -> ../../.agents/skills/<new-name>`, since one name both global and in the project leaves Codex loading neither. After approval, copy the skill folder there, set its frontmatter `name` to the new name, and edit the copy. The copy no longer sits beside the other pstack skills, so rewrite each sibling reference in it, `../<name>/...` and the skill-files sentence alike, to the installed sibling under `~/.agents/skills/<name>/`, which both harnesses' installs resolve to. Check that every rewritten path exists before declaring the edit done. Never open a PR or push.
 
 Follow each approved row's Routing exactly:
 
 - Trivial existing-skill edit (a one-line bullet, a tightened sentence, a stale fact corrected): the parent does it directly.
-- Substantive existing-skill edit (a new section, a new pattern table, more than ~10 lines): hand to Cursor's built-in `create-skill` skill and run its draft / test / iterate loop.
-- `tune description: <skill path>` (the skill exists but didn't trigger when it should have): hand to `create-skill` and run its description-optimization loop.
-- `new skill via create-skill: <kebab-name>`: hand creation to `create-skill`. Do not invent the shape ad hoc.
+- Substantive existing-skill edit (a new section, a new pattern table, more than ~10 lines): hand to the **skill-creator** skill and run its draft / test / iterate loop.
+- `tune description: <skill path>` (the skill exists but didn't trigger when it should have): hand to **skill-creator** and run its description-optimization loop.
+- `new skill via skill-creator: <kebab-name>`: hand creation to **skill-creator**. Do not invent the shape ad hoc.
+
+Without **skill-creator** installed, follow the Authoring-a-skill playbook (`../poteto-mode/playbooks/authoring-a-skill.md`) wherever a routing names it.
 
 If your environment ships a SKILL.md validator, run it on every touched skill before declaring done.
 

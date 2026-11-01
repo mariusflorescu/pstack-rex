@@ -56,22 +56,21 @@ else
 fi
 
 # PR state by branch, fetched once as [{number, state, head}] with a lowercase
-# state. Origin when its CLI can read this repo's PRs, otherwise gh. Empty when
-# neither can.
+# state, from gh. Empty when gh can't read this repo's PRs.
 prs=$(mktemp)
-if command -v origin >/dev/null 2>&1 \
-	&& raw=$(origin pr list --author "@me" --state all --limit 1000 \
-		--json number,status,headRef 2>/dev/null); then
-	printf '%s' "$raw" | jq '[.[] | {number, state: .status, head: .headRef}]' > "$prs" 2>/dev/null
-elif raw=$(gh pr list --author "@me" --state all --limit 1000 \
+if raw=$(gh pr list --author "@me" --state all --limit 1000 \
 	--json number,state,headRefName 2>/dev/null); then
 	printf '%s' "$raw" | jq '[.[] | {number, state: (.state | ascii_downcase), head: .headRefName}]' > "$prs" 2>/dev/null
 fi
 [ -s "$prs" ] || echo "[]" > "$prs"
 
-# Transcripts dir: ~/.cursor/projects/<slugified-repo-path>/agent-transcripts.
-slug=$(printf '%s' "$main_wt" | sed 's#^/##; s#/#-#g')
-transcripts="$HOME/.cursor/projects/$slug/agent-transcripts"
+# Transcripts: Claude Code keeps ~/.claude/projects/<path with / and . as ->/ for the
+# repo and each worktree under it, Codex keeps ~/.codex/sessions/. Listed once,
+# Codex rollouts from the last 30 days only.
+slug=$(printf '%s' "$main_wt" | sed 's#[/.]#-#g')
+transcripts=$(mktemp)
+{ find "$HOME/.claude/projects" -maxdepth 2 -path "$HOME/.claude/projects/$slug*" -name '*.jsonl' 2>/dev/null
+  find "$HOME/.codex/sessions" -name 'rollout-*.jsonl' -mtime -30 2>/dev/null; } > "$transcripts"
 now=$(date +%s)
 
 echo "# base: $base"
@@ -111,8 +110,8 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 	# Most recent chat whose transcript operated in this worktree. Match path
 	# followed by "/" or a quote so glint-482 does not match glint-482-r37.
 	last="-"; last_ts=0
-	if [ -d "$transcripts" ]; then
-		f=$(rg -l -e "${wt}/" -e "${wt}\"" "$transcripts" 2>/dev/null \
+	if [ -s "$transcripts" ]; then
+		f=$(tr '\n' '\0' < "$transcripts" | xargs -0 rg -l -e "${wt}/" -e "${wt}\"" 2>/dev/null \
 			| xargs stat "${stat_fmt[@]}" 2>/dev/null | sort -rn | head -1)
 		if [ -n "$f" ]; then last_ts=$(echo "$f" | awk '{print $1}')
 			last=$(fmt_day "$last_ts" 2>/dev/null); fi
@@ -131,4 +130,4 @@ git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt;
 		"$size" "$age" "$merged" "$dirty" "$remote" "$pr" "$last" "$bucket" "$wt"
 done | sort -t$'\t' -k1,1 -rh
 
-rm -f "$prs"
+rm -f "$prs" "$transcripts"
