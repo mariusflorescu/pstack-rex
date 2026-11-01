@@ -786,18 +786,24 @@ cmd__event() { # block kind args... (called by watch.lua)
       ;;
     exited)
       case $status in closing) return 0 ;; esac
-      local code=${3:-unknown}
+      local code=${3:-unknown} midturn=0
+      [ "$(wfield "$id" .notified_turn)" != "$(wfield "$id" .turn)" ] && midturn=1
       wupdate "$id" '.prev_state = .state | .state = "exited" | .exit_code = $c' --arg c "$code"
       if [ "$(wfield "$id" .kind)" = command ]; then
         notify "$id" exited "$id exited with code $code."
+      elif [ "$midturn" = 1 ]; then
+        notify "$id" exited "$id's agent exited mid-turn (code $code) before it reported. Its work may be partial."
       else
-        notify "$id" exited "$id's agent exited (code $code)."
+        notify "$id" exited "$id's agent exited (code $code) after its last report."
       fi
       ;;
     closed)
       if [ "$status" = closing ]; then finish_closed "$id"; return 0; fi
-      wupdate "$id" '.prev_state = .state | .state = "closed"'
-      notify "$id" closed "$id's pane was closed outside pstack-rex."
+      # A pane closes right after its program exits: the exit already told the main agent
+      if [ "$(wfield "$id" .last_event)" != exited ]; then
+        wupdate "$id" '.prev_state = .state | .state = "closed"'
+        notify "$id" closed "$id's pane was closed outside pstack-rex$( [ "$(wfield "$id" .notified_turn)" != "$(wfield "$id" .turn)" ] && echo ' mid-turn, before it reported')."
+      fi
       finish_closed "$id"
       ;;
   esac
