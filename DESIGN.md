@@ -64,18 +64,23 @@ worker pane ──OSC 7501──▶ Rex ──terminal.program_status_changed─
                         --thread $CODEX_THREAD_ID              into the main pane
 ```
 
-- **One watcher per Rex session**, `rex do -s <session> watch.lua`, started detached by the first `spawn` and stopped when the session has no workers left. A pidfile keeps it single. `status` restarts it when it died.
+- **One watcher per Rex session**, `rex do -s <session> watch.lua`, started detached by the first `spawn`. It stops itself once the session has no open workers and no wake-up waits for delivery (a line queued in its 2s window, or one held for the main pane, for an hour at most). A pidfile keeps it single. `status` restarts it when it died.
 - **Signals.** Claude Code and Codex both report through the Program Status Protocol (OSC 7501): `idle`, `working`, `done`, `blocked` (with `kind` and `msg`), `error`. The watcher reads only the root record of registered worker blocks, plus `terminal.child_exited` and `block_closed`.
-- **What wakes the main agent.** A `done` whose last message carries `TASK STATUS:`. A `done` without one, once the pane stays quiet for 45s (a Claude worker with a background shell reports `done`, then works again when the shell finishes, probed). Any `blocked`, `error`, exit or close. Plain turn churn never does.
+- **What wakes the main agent.** A `done` whose last message carries `TASK STATUS:`. The transcript can trail the `done` by a few seconds (probed), so the marker is read again 5s later. A `done` without one, once the pane stays quiet for 45s (a Claude worker with a background shell reports `done`, then works again when the shell finishes, probed). Any `blocked`, `error`, exit or close. Plain turn churn never does.
+- **A worker killed mid-turn.** Its agent's exit fires `terminal.child_exited`, and the line says it exited mid-turn before it reported (probed with `kill -9` on Claude and Codex workers, under both mains). The pane closing right after adds no second line.
 - **Codex rewrites `done` to `idle`** on a redraw or resize (probed), so the live record is not the truth after the fact. The watcher records each `done` when it fires, and `status` reads the record.
 - **Delivery.** Each wake is one line, `[pstack-rex] interrogate-codex finished (TASK STATUS: done). 1 of 3 still running. Read it: <cli> result interrogate-codex`. Events within 2s go out as one line.
-  - Codex main: `codex queue --thread $CODEX_THREAD_ID --message ...`. It starts a turn when Codex is idle and lands as the next turn when it's busy (probed).
+  - Codex main: `codex queue --thread $CODEX_THREAD_ID --message ...`. It starts a turn when Codex is idle and lands as the next turn when it's busy (probed). Since it can't land mid-turn anyway, the line is held while the Codex main is `working` and sent when its turn ends. A line about a report the main already read with `subagent result` is dropped then.
   - Claude main: `rex send` plus `enter` into the main pane. It starts a turn when idle, and Claude takes it between tool calls when busy (probed). If the main pane is `blocked` on a dialog, the line waits until it isn't.
   - The main agent is detected from its own environment when it runs `subagent`: `CODEX_THREAD_ID` (Codex) or `CLAUDE_CODE_SESSION_ID` (Claude). Claude's commands see its own `REX_BLOCK`. A Codex main the user started plainly runs its commands on the shared daemon, so its `REX_BLOCK` can be stale. `subagent` then finds the pane from Rex's side: the pane whose foreground process is a Codex TUI, that is `working` right now (it is inside this very tool call), titled with this thread's name from `~/.codex/session_index.jsonl`, in this cwd. The answer is cached per thread, and `PSTACK_REX_MAIN_BLOCK` overrides it.
 - **No polling.** The main agent spawns, says what it's waiting for, and ends its turn. The wake line starts its next turn. `subagent wait` exists for a script or a Claude main that would rather block in a background command; while one runs, the watcher doesn't type into that pane.
 - **Results** come from the worker's own transcript, not its screen: the last assistant text in the Claude transcript, or `last_agent_message` of the latest `task_complete` in the Codex rollout. The screen is the fallback.
 
 State lives in `~/.local/state/pstack-rex/`: `workers/<id>.json`, `workers/<id>/brief.md`, `by-block/<block>` links for the watcher, `inbox/<main>.ndjson`, `watchers/<session>.pid`, `log/`.
+
+### Why the watcher and not hooks
+
+Claude Code's Stop and Notification hooks and Codex's `notify` can report a turn too (probed: both carry the last message). They were tried and dropped. They differ per agent, each has to be wired into that agent's config or launch flags, and Codex also notifies for its own title helper on another thread. The Program Status Protocol is the same for both agents, needs nothing installed into either, and also sees a worker that dies, which no hook reports. The TASK STATUS line in the brief's footer is what turns a `done` into a result.
 
 ## Worktrees
 

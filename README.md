@@ -15,10 +15,10 @@ pstack is an engineering skill library for coding agents. Lauren Tan ([poteto](h
 ## Install
 
 ```bash
-npx skills add mariusflorescu/pstack-rex -g -a claude-code -a codex
+npx skills add mariusflorescu/pstack-rex -g -a claude-code -a codex -s '*' -y
 ```
 
-This puts one copy of each skill in `~/.agents/skills/` (Codex reads it there) and a symlink in `~/.claude/skills/` (Claude Code reads it there). Update with `npx skills update -g`. Install globally or per project, not both: when a skill name exists in both `~/.agents/skills` and a project's `.agents/skills`, Codex resolves neither on `$<name>`.
+This puts one copy of each skill in `~/.agents/skills/` (Codex reads it there) and a symlink in `~/.claude/skills/` (Claude Code reads it there). Refresh just this pack by running that command again. `npx skills update -g` also works, but it updates every globally installed skill, not only pstack's. Install globally or per project, not both: when a skill name exists in both `~/.agents/skills` and a project's `.agents/skills`, Codex resolves neither on `$<name>`.
 
 You also need Rex, `jq`, `gh` (the only forge pstack uses), `perl` (macOS has it), and [Bun](https://bun.sh) for the `watch-pr` script.
 
