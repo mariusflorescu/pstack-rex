@@ -1,5 +1,7 @@
 # pstack for Rex
 
+> **Moved to [mariusflorescu/the-kit](https://github.com/mariusflorescu/the-kit).** pstack-rex now lives there in `plugins/pstack-rex/`, with its full history, next to thermos-rex. This repo is archived and gets no more updates. Install from the kit with `npx skills add mariusflorescu/the-kit/plugins/pstack-rex -g -a claude-code -a codex -s '*' -y`.
+
 pstack is an engineering skill library for coding agents. Lauren Tan ([poteto](https://x.com/poteto)) wrote it for Cursor: one mode skill that routes every task to a playbook, principles that ground each decision, and verification strict enough to parallelize with confidence. This repo ships it to Claude Code and Codex running in [Rex](https://www.superlogical.com/rex), Superlogical's terminal multiplexer, as 60 skills. Every subagent a skill spawns opens as its own Claude Code or Codex agent in a Rex pane to the right of yours, and you get woken when it finishes or gets stuck.
 
 ```
