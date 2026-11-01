@@ -1,0 +1,7 @@
+repo=https://github.com/cursor/plugins.git
+sha=c742dd61706fbacc1b95f1a20b7b988cf096ce6c
+# upstream path -> repo path, longest prefix wins
+map=pstack/skills/ skills/
+map=cursor-team-kit/skills/deslop/ skills/deslop/
+map=pstack/agents/poteto-agent.md skills/poteto-mode/references/poteto-agent.md
+map=pstack/agents/comment-sicko.md skills/no-comments/references/comment-sicko.md
